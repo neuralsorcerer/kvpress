@@ -8,7 +8,14 @@ from typing import Generator
 
 import torch
 from torch import nn
-from transformers import LlamaForCausalLM, MistralForCausalLM, Phi3ForCausalLM, PreTrainedModel, Qwen2ForCausalLM
+from transformers import (
+    LlamaForCausalLM,
+    MistralForCausalLM,
+    Phi3ForCausalLM,
+    PreTrainedModel,
+    Qwen2ForCausalLM,
+    QuantizedCache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +99,12 @@ class BasePress:
         if (self.compression_ratio == 0) or (cache.seen_tokens > q_len):
             return output
 
-        keys = cache.key_cache[module.layer_idx]
-        values = cache.value_cache[module.layer_idx]
+        if isinstance(cache, QuantizedCache):
+            keys = cache._dequantize(cache._quantized_key_cache[module.layer_idx])
+            values = cache._dequantize(cache._quantized_value_cache[module.layer_idx])
+        else:
+            keys = cache.key_cache[module.layer_idx]
+            values = cache.value_cache[module.layer_idx]
 
         with torch.no_grad():
             scores = self.score(module, hidden_states, keys, values, attentions, kwargs)
@@ -104,8 +115,14 @@ class BasePress:
         indices = indices.unsqueeze(-1).expand(-1, -1, -1, module.head_dim)
 
         # Update cache
-        cache.key_cache[module.layer_idx] = keys.gather(2, indices)
-        cache.value_cache[module.layer_idx] = values.gather(2, indices)
+        keys = keys.gather(2, indices).contiguous()
+        values = values.gather(2, indices).contiguous()
+        if isinstance(cache, QuantizedCache):
+            cache._quantized_key_cache[module.layer_idx] = cache._quantize(keys, axis=cache.axis_key)
+            cache._quantized_value_cache[module.layer_idx] = cache._quantize(values, axis=cache.axis_value)
+        else:
+            cache.key_cache[module.layer_idx] = keys
+            cache.value_cache[module.layer_idx] = values
 
         return output
 
