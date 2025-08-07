@@ -238,6 +238,26 @@ class KVPressTextGenerationPipeline(Pipeline):
             return {"answer": model_outputs[0]}
         return {"answers": model_outputs}
 
+    def _trim_cache(self, cache: Cache, cache_seq_lengths: list[int]) -> None:
+        """Restore cache tensors to their original sequence lengths."""
+        cache.key_cache = [
+            cache.key_cache[layer_idx][:, :, :seq_len]
+            for layer_idx, seq_len in enumerate(cache_seq_lengths)
+        ]
+        cache.value_cache = [
+            cache.value_cache[layer_idx][:, :, :seq_len]
+            for layer_idx, seq_len in enumerate(cache_seq_lengths)
+        ]
+        if hasattr(cache, "_quantized_key_cache"):
+            cache._quantized_key_cache = [
+                cache._quantized_key_cache[layer_idx][:, :, :seq_len]
+                for layer_idx, seq_len in enumerate(cache_seq_lengths)
+            ]
+            cache._quantized_value_cache = [
+                cache._quantized_value_cache[layer_idx][:, :, :seq_len]
+                for layer_idx, seq_len in enumerate(cache_seq_lengths)
+            ]
+
     def generate_answer(
         self, question_ids: torch.Tensor, cache: Cache, context_length: int, max_new_tokens: int
     ) -> str:
@@ -253,7 +273,8 @@ class KVPressTextGenerationPipeline(Pipeline):
         context_length : int
             The length of the context.
         max_new_tokens : int
-            The maximum number of new tokens to generate.
+            The maximum number of new tokens to generate. If 0 or less, the question is processed
+            without generating new tokens and the cache is restored to its previous state.
 
         Returns
         -------
@@ -273,6 +294,13 @@ class KVPressTextGenerationPipeline(Pipeline):
             position_ids=position_ids,
             num_logits_to_keep=1,
         )
+
+        # When no new tokens are requested, we only need the model to process
+        # the question ids (to populate the cache) and then restore the cache to
+        # its pre-question state.
+        if max_new_tokens <= 0:
+            self._trim_cache(cache, cache_seq_lengths)
+            return ""
 
         position_ids = position_ids[:, -1:] + 1
         generated_ids = [outputs.logits[0, -1].argmax()]
@@ -294,23 +322,7 @@ class KVPressTextGenerationPipeline(Pipeline):
         answer = self.tokenizer.decode(torch.stack(generated_ids), skip_special_tokens=True)
 
         # Remove the generated tokens from the cache
-        cache.key_cache = [
-            cache.key_cache[layer_idx][:, :, :sequence_length]
-            for layer_idx, sequence_length in enumerate(cache_seq_lengths)
-        ]
-        cache.value_cache = [
-            cache.value_cache[layer_idx][:, :, :sequence_length]
-            for layer_idx, sequence_length in enumerate(cache_seq_lengths)
-        ]
-        if hasattr(cache, "_quantized_key_cache"):
-            cache._quantized_key_cache = [
-                cache._quantized_key_cache[layer_idx][:, :, :sequence_length]
-                for layer_idx, sequence_length in enumerate(cache_seq_lengths)
-            ]
-            cache._quantized_value_cache = [
-                cache._quantized_value_cache[layer_idx][:, :, :sequence_length]
-                for layer_idx, sequence_length in enumerate(cache_seq_lengths)
-            ]
+        self._trim_cache(cache, cache_seq_lengths)
 
         return answer
 

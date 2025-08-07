@@ -133,6 +133,34 @@ def test_pipeline_context_cache_is_invariant(unit_test_model):  # noqa: F811
     assert all([torch.allclose(value, new_value) for value, new_value in zip(values, past_key_values.value_cache)])
 
 
+@torch.no_grad()
+def test_generate_answer_zero_new_tokens_returns_empty_string(unit_test_model):  # noqa: F811
+    model = unit_test_model
+    questions = ["When was this article written?"]
+    tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+    compression_pipeline = KVPressTextGenerationPipeline(model=model, tokenizer=tokenizer, device=device)
+    input_ids_question = tokenizer(questions[0], return_tensors="pt", add_special_tokens=False)["input_ids"].to(device)
+
+    seq_len = 256
+    past_key_values: DynamicCache = model(
+        input_ids=torch.randint(0, 1000, (1, seq_len), device=device), past_key_values=DynamicCache()
+    ).past_key_values
+    assert past_key_values.get_seq_length() == seq_len
+    keys = [key.clone() for key in past_key_values.key_cache]
+    values = [value.clone() for value in past_key_values.value_cache]
+
+    answer = compression_pipeline.generate_answer(
+        input_ids_question, past_key_values, context_length=22, max_new_tokens=0
+    )
+
+    assert answer == ""
+    assert past_key_values.get_seq_length() == seq_len
+    assert all([torch.allclose(key, new_key) for key, new_key in zip(keys, past_key_values.key_cache)])
+    assert all([torch.allclose(value, new_value) for value, new_value in zip(values, past_key_values.value_cache)])
+
+
 def generate_answer(model):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model.to(device)
