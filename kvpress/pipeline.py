@@ -273,8 +273,7 @@ class KVPressTextGenerationPipeline(Pipeline):
         context_length : int
             The length of the context.
         max_new_tokens : int
-            The maximum number of new tokens to generate. If 0 or less, the question is processed
-            without generating new tokens and the cache is restored to its previous state.
+            The maximum number of new tokens to generate.
 
         Returns
         -------
